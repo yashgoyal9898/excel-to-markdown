@@ -2,7 +2,7 @@ import streamlit as st
 from io import BytesIO
 from pathlib import Path
 
-from sexcel_to_md import extract_excel_to_markdown
+from excel_to_md import extract_excel_to_markdown
 
 st.set_page_config(
     page_title="Excel → Markdown",
