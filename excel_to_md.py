@@ -1,10 +1,10 @@
+import re
 from io import BytesIO
-import pandas as pd
+from openpyxl import load_workbook
 
 
 def escape_markdown(value):
-
-    if pd.isna(value):
+    if value is None:
         return ""
 
     text = str(value)
@@ -15,55 +15,78 @@ def escape_markdown(value):
     return text
 
 
-def dataframe_to_markdown(df):
+def format_cell(cell):
+    value = cell.value
 
-    headers = [escape_markdown(col) for col in df.columns]
+    if value is None:
+        return ""
+
+    number_format = str(cell.number_format) if cell.number_format else "General"
+
+    # Built-in Excel format IDs 9 = "0%", 10 = "0.00%"
+    # openpyxl sometimes returns "General" for these instead of resolving the %
+    if "%" not in number_format:
+        try:
+            from openpyxl.styles.numbers import BUILTIN_FORMATS
+            fmt_id = cell._style.numFmtId
+            builtin_fmt = BUILTIN_FORMATS.get(fmt_id, "")
+            if "%" in str(builtin_fmt):
+                number_format = builtin_fmt
+        except Exception:
+            pass
+
+    # Percentage: robust decimal extraction via regex (handles "#,##0.0%" edge case)
+    if "%" in number_format and isinstance(value, (int, float)):
+        match = re.search(r'\.(\d+)%', number_format)
+        decimals = len(match.group(1)) if match else 0
+        value = f"{value * 100:.{decimals}f}%"
+
+    return escape_markdown(value)
+
+
+def worksheet_to_markdown(ws):
+
+    rows = list(ws.iter_rows())
+
+    if not rows:
+        return "_Empty Sheet_"
+
+    headers = [format_cell(c) for c in rows[0]]
 
     lines = []
 
     lines.append("| " + " | ".join(headers) + " |")
     lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
 
-    for _, row in df.iterrows():
-        values = [escape_markdown(v) for v in row]
+    for row in rows[1:]:
+        values = [format_cell(c) for c in row]
         lines.append("| " + " | ".join(values) + " |")
 
     return "\n".join(lines)
 
 
-def extract_excel_to_markdown(excel_bytes: BytesIO, workbook_name: str) -> str:
+def extract_excel_to_markdown(excel_bytes: BytesIO, workbook_name: str):
 
-    xls = pd.ExcelFile(excel_bytes)
+    excel_bytes.seek(0)
+
+    wb = load_workbook(
+        excel_bytes,
+        data_only=True
+    )
 
     md = []
 
     md.append(f"# {workbook_name}")
     md.append("")
 
-    for sheet in xls.sheet_names:
+    for ws in wb.worksheets:
 
-        md.append(f"## {sheet}")
+        md.append(f"## {ws.title}")
         md.append("")
 
-        df = pd.read_excel(
-            excel_bytes,
-            sheet_name=sheet,
-            dtype=object
-        )
-
-        if df.empty and len(df.columns) == 0:
-
-            md.append("_Empty Sheet_")
-            md.append("")
-            md.append("---")
-            md.append("")
-            continue
-
-        md.append(dataframe_to_markdown(df))
+        md.append(worksheet_to_markdown(ws))
         md.append("")
         md.append("---")
         md.append("")
-
-        excel_bytes.seek(0)
 
     return "\n".join(md)
